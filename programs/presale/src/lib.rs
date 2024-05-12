@@ -82,7 +82,7 @@ pub mod presale {
         Ok(())
     }
 
-    pub fn buy(ctx: Context<TransferLamportsAndBuyTokens>,  tokens_to_buy: u128, amount_sol: u64) -> Result<()> {
+    pub fn buy(ctx: Context<TransferLamportsAndBuyTokens>,  tokens_to_buy: u128) -> Result<()> {
         let from_account = &mut ctx.accounts.from;
         // let from_account: &ctx.accounts.from;
         let to_account = &mut ctx.accounts.to;
@@ -90,19 +90,21 @@ pub mod presale {
         let token_price = presale_account.token_price;
         let tokens_sold =  presale_account.tokens_sold;
         let tokens_to_sell = presale_account.tokens_to_sell;
-        require!(token_price * tokens_to_buy == amount_sol.into(), PresaleErrors::InsufficientLamports);
+        let amount_lamports = token_price * tokens_to_buy;
+        // require!(token_price * tokens_to_buy == amount_sol.into(), PresaleErrors::InsufficientLamports);
         require!(tokens_sold + tokens_to_buy <= tokens_to_sell, PresaleErrors::InsufficientTokens);
-
+        require_keys_eq!(to_account.key(), presale_account.owner);
         let user_account = &mut ctx.accounts.user_account;
-        user_account.bought_amount = tokens_to_buy;
+        user_account.bought_amount += tokens_to_buy;
         // Create the transfer instruction
-        let transfer_instruction = system_instruction::transfer(from_account.key, to_account.key, amount_sol);
+        let transfer_instruction = system_instruction::transfer(from_account.key, to_account.key, amount_lamports as u64);
         // Invoke the transfer instruction
+        // when the pda is transferring, use invoke_signed
         anchor_lang::solana_program::program::invoke_signed(
             &transfer_instruction,
             &[
                 from_account.to_account_info(), // transformation to the AccountInfo struct
-                to_account.clone(),
+                to_account.clone(), // to_account.to_account_info()
                 ctx.accounts.system_program.to_account_info(),
             ],
             &[],
@@ -130,7 +132,6 @@ pub struct UpdatePresale<'info> {
     pub presale_account: Account<'info, PresaleAccount>,
 }
 
-
 #[derive(Accounts)]
 pub struct TransferLamportsAndBuyTokens<'info> {
     #[account(mut)]
@@ -139,7 +140,11 @@ pub struct TransferLamportsAndBuyTokens<'info> {
     pub to: AccountInfo<'info>,
     #[account(mut, seeds = [b"presale_account"], bump)]
     pub presale_account: Account<'info, PresaleAccount>,
-    #[account(init_if_needed, payer = from, space = 8 + UserAccount::INIT_SPACE, seeds = [b"bought_amount"], bump)]
+    /*
+    Update: using signer's pubkey as extra param for seed so that for every user a unique pda will be 
+    created unlike before where we were just updating same account balance for every call since the seed was same
+    */
+    #[account(init_if_needed, payer = from, space = 8 + UserAccount::INIT_SPACE, seeds = [b"bought_amount", from.key().as_ref()], bump)]
     pub user_account: Account<'info, UserAccount>,
     // pub amount_sol: u128,
     pub system_program: Program<'info, System>,
@@ -173,5 +178,7 @@ pub enum PresaleErrors {
     #[msg("Not enough lamports sent")]
     InsufficientLamports,
     #[msg("Not enough tokens")]
-    InsufficientTokens
+    InsufficientTokens,
+    #[msg("To address invalid")]
+    ToAddressNotOwner
 }
